@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DevOps / SRE / Cloud Job Aggregator</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #c9d1d9; line-height: 1.6; }
+.header { background: #161b22; border-bottom: 1px solid #30363d; padding: 20px 30px; }
+.header h1 { color: #58a6ff; font-size: 1.5rem; margin-bottom: 4px; }
+.header .subtitle { color: #8b949e; font-size: 0.9rem; }
+.controls { background: #161b22; border-bottom: 1px solid #30363d; padding: 12px 30px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.controls input, .controls select { background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 8px 12px; border-radius: 6px; font-size: 0.85rem; }
+.controls input { width: 280px; }
+.controls select { cursor: pointer; }
+.controls .stat { color: #8b949e; font-size: 0.85rem; margin-left: auto; }
+table { width: 100%; border-collapse: collapse; }
+thead th { position: sticky; top: 0; background: #161b22; color: #8b949e; text-align: left; padding: 10px 14px; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #30363d; cursor: pointer; user-select: none; }
+thead th:hover { color: #58a6ff; }
+thead th.sorted-asc::after { content: " ▲"; }
+thead th.sorted-desc::after { content: " ▼"; }
+tbody tr { border-bottom: 1px solid #21262d; transition: background 0.15s; }
+tbody tr:hover { background: #161b22; }
+tbody td { padding: 10px 14px; font-size: 0.85rem; vertical-align: top; }
+td.title a { color: #58a6ff; text-decoration: none; font-weight: 500; }
+td.title a:hover { text-decoration: underline; }
+td.company { color: #d2a8ff; }
+td.source { color: #7ee787; font-size: 0.8rem; }
+td.score { font-weight: 700; }
+td.score.high { color: #3fb950; }
+td.score.medium { color: #d29922; }
+td.score.low { color: #f85149; }
+td.score.none { color: #484f58; }
+td.reason { color: #8b949e; font-size: 0.8rem; max-width: 250px; }
+td.date { color: #8b949e; font-size: 0.8rem; white-space: nowrap; }
+td.apply a { color: #f0883e; text-decoration: none; font-size: 0.8rem; }
+td.apply a:hover { text-decoration: underline; }
+.pagination { display: flex; justify-content: center; align-items: center; gap: 8px; padding: 16px; background: #161b22; border-top: 1px solid #30363d; }
+.pagination button { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
+.pagination button:hover:not(:disabled) { background: #30363d; }
+.pagination button:disabled { opacity: 0.4; cursor: default; }
+.pagination .page-info { color: #8b949e; font-size: 0.85rem; }
+.empty { text-align: center; padding: 60px 20px; color: #484f58; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>DevOps / SRE / Cloud Job Aggregator</h1>
+  <div class="subtitle">Remote positions aggregated from free sources &mdash; updated every 6 hours</div>
+</div>
+
+<div class="controls">
+  <input type="text" id="search" placeholder="Search title or company..." oninput="onSearch()" />
+  <select id="sourceFilter" onchange="onSearch()">
+    <option value="">All sources</option>
+  </select>
+  <select id="scoreFilter" onchange="onSearch()">
+    <option value="">All scores</option>
+    <option value="high">High (70+)</option>
+    <option value="medium">Medium (40-69)</option>
+    <option value="low">Low (0-39)</option>
+    <option value="none">Unscored</option>
+  </select>
+  <span class="stat" id="stats"></span>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th data-key="title" onclick="sortBy('title')">Title</th>
+      <th data-key="company" onclick="sortBy('company')">Company</th>
+      <th data-key="source" onclick="sortBy('source')">Source</th>
+      <th data-key="location" onclick="sortBy('location')">Location</th>
+      <th data-key="relevance_score" onclick="sortBy('relevance_score')">Score</th>
+      <th>Reason</th>
+      <th data-key="fetched_at" onclick="sortBy('fetched_at')">Discovered</th>
+      <th>Apply</th>
+    </tr>
+  </thead>
+  <tbody id="tbody"></tbody>
+</table>
+
+<div class="pagination" id="pagination"></div>
+
+<script>
+const JOBS = {{ jobs_json | safe }};
+const PER_PAGE = 50;
+
+let filtered = [...JOBS];
+let currentPage = 1;
+let sortKey = "fetched_at";
+let sortDir = "desc";
+
+function init() {
+  populateSourceFilter();
+  applySort();
+  render();
+}
+
+function populateSourceFilter() {
+  const sources = [...new Set(JOBS.map(j => j.source).filter(Boolean))].sort();
+  const sel = document.getElementById("sourceFilter");
+  sources.forEach(s => {
+    const opt = document.createElement("option");
+    opt.value = s;
+    opt.textContent = s;
+    sel.appendChild(opt);
+  });
+}
+
+function onSearch() {
+  const q = document.getElementById("search").value.toLowerCase();
+  const src = document.getElementById("sourceFilter").value;
+  const scoreF = document.getElementById("scoreFilter").value;
+
+  filtered = JOBS.filter(j => {
+    if (q && !(j.title || "").toLowerCase().includes(q) && !(j.company || "").toLowerCase().includes(q)) return false;
+    if (src && j.source !== src) return false;
+    if (scoreF === "high" && (j.relevance_score == null || j.relevance_score < 70)) return false;
+    if (scoreF === "medium" && (j.relevance_score == null || j.relevance_score < 40 || j.relevance_score >= 70)) return false;
+    if (scoreF === "low" && (j.relevance_score == null || j.relevance_score < 0 || j.relevance_score >= 40)) return false;
+    if (scoreF === "none" && j.relevance_score != null) return false;
+    return true;
+  });
+
+  currentPage = 1;
+  applySort();
+  render();
+}
+
+function sortBy(key) {
+  if (sortKey === key) {
+    sortDir = sortDir === "asc" ? "desc" : "asc";
+  } else {
+    sortKey = key;
+    sortDir = key === "fetched_at" || key === "relevance_score" ? "desc" : "asc";
+  }
+  applySort();
+  render();
+  // Update header indicators
+  document.querySelectorAll("thead th").forEach(th => {
+    th.classList.remove("sorted-asc", "sorted-desc");
+    if (th.dataset.key === sortKey) {
+      th.classList.add(sortDir === "asc" ? "sorted-asc" : "sorted-desc");
+    }
+  });
+}
+
+function applySort() {
+  filtered.sort((a, b) => {
+    let va = a[sortKey] || "";
+    let vb = b[sortKey] || "";
+    if (sortKey === "relevance_score") {
+      va = va ?? -1;
+      vb = vb ?? -1;
+    }
+    if (va < vb) return sortDir === "asc" ? -1 : 1;
+    if (va > vb) return sortDir === "asc" ? 1 : -1;
+    return 0;
+  });
+}
+
+function scoreClass(s) {
+  if (s == null) return "none";
+  if (s >= 70) return "high";
+  if (s >= 40) return "medium";
+  return "low";
+}
+
+function fmtDate(iso) {
+  if (!iso) return "";
+  try {
+    const d = new Date(iso);
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  } catch { return iso.slice(0, 10); }
+}
+
+function escHtml(s) {
+  const div = document.createElement("div");
+  div.textContent = s || "";
+  return div.innerHTML;
+}
+
+function render() {
+  const tbody = document.getElementById("tbody");
+  const total = filtered.length;
+  const pages = Math.max(1, Math.ceil(total / PER_PAGE));
+  if (currentPage > pages) currentPage = pages;
+
+  const start = (currentPage - 1) * PER_PAGE;
+  const page = filtered.slice(start, start + PER_PAGE);
+
+  tbody.innerHTML = page.length === 0
+    ? '<tr><td colspan="8" class="empty">No jobs found</td></tr>'
+    : page.map(j => `<tr>
+      <td class="title"><a href="${escHtml(j.link)}" target="_blank" rel="noopener">${escHtml(j.title)}</a></td>
+      <td class="company">${escHtml(j.company)}</td>
+      <td class="source">${escHtml(j.source)}</td>
+      <td>${escHtml(j.location)}</td>
+      <td class="score ${scoreClass(j.relevance_score)}">${j.relevance_score != null ? j.relevance_score : "—"}</td>
+      <td class="reason">${escHtml(j.llm_reason)}</td>
+      <td class="date">${fmtDate(j.fetched_at)}</td>
+      <td class="apply"><a href="${escHtml(j.link)}" target="_blank" rel="noopener">Apply &rarr;</a></td>
+    </tr>`).join("");
+
+  // Stats
+  document.getElementById("stats").textContent = `${total} job${total !== 1 ? "s" : ""}`;
+
+  // Pagination
+  const pag = document.getElementById("pagination");
+  if (pages <= 1) { pag.innerHTML = ""; return; }
+  pag.innerHTML = `
+    <button onclick="goPage(1)" ${currentPage === 1 ? "disabled" : ""}>&laquo;</button>
+    <button onclick="goPage(${currentPage - 1})" ${currentPage === 1 ? "disabled" : ""}>&lsaquo; Prev</button>
+    <span class="page-info">Page ${currentPage} of ${pages}</span>
+    <button onclick="goPage(${currentPage + 1})" ${currentPage === pages ? "disabled" : ""}>Next &rsaquo;</button>
+    <button onclick="goPage(${pages})" ${currentPage === pages ? "disabled" : ""}>&raquo;</button>
+  `;
+}
+
+function goPage(p) {
+  currentPage = p;
+  render();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+init();
+</script>
+</body>
+</html>

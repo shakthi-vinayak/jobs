@@ -1,0 +1,62 @@
+# Job Aggregator Agent Configuration
+
+# Keywords for pre-filtering job titles/descriptions
+keywords:
+  - DevOps
+  - SRE
+  - Site Reliability
+  - Platform Engineer
+  - Cloud Engineer
+  - Infrastructure Engineer
+  - Kubernetes
+  - Cloud Architect
+  - Platform Engineering
+  - DevSecOps
+  - Systems Engineer
+  - Production Engineer
+  - Reliability Engineer
+  - Cloud Infrastructure
+  - Infrastructure as Code
+  - Terraform
+  - Ansible
+  - CI/CD
+  - Container Orchestration
+
+# Greenhouse company slugs (add/remove as needed)
+greenhouse_companies:
+  - gitlab
+  - hashicorp
+  - datadog
+  - elastic
+  - circleci
+  - grafana
+  - pagerduty
+  - cloudflare
+  - stripe
+  - shopify
+
+# Lever company slugs (add/remove as needed)
+lever_companies:
+  - planet
+  - launchdarkly
+  - notion
+  - watershed
+  - asana
+  - benchling
+  - coda
+  - ditch
+
+# LLM relevance scoring threshold (0-100) for email alerts
+relevance_threshold: 70
+
+# OpenRouter model for scoring (free/cheap tier models rotate — update as needed)
+openrouter_model: "deepseek/deepseek-chat-v3-0324:free"
+
+# Batch size for LLM scoring calls
+llm_batch_size: 5
+
+# Politeness delay between fetcher requests (seconds)
+request_delay: 1
+
+# Cron schedule (inside Docker container)
+cron_schedule: "0 */6 * * *"

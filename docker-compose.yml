@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  job-agent:
+    build:
+      context: .
+      args:
+        CRON_SCHEDULE: "0 */6 * * *"
+    container_name: devops-job-agent
+    volumes:
+      - job-agent-data:/data
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  job-agent-data:
