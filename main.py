@@ -111,13 +111,12 @@ def run_pipeline(config: dict, env_path: str = ".env") -> None:
 
     # ---- Step 4: LLM relevance scoring (new unscored jobs only) ----
     openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
-    model = config.get("openrouter_model", "deepseek/deepseek-chat-v3-0324:free")
+    models = config.get("openrouter_models", [])
     batch_size = config.get("llm_batch_size", 5)
 
-    if openrouter_key and new_count > 0:
-        logger.info("Scoring new jobs with LLM...")
+    if openrouter_key and models and new_count > 0:
+        logger.info("Scoring new jobs with LLM (%d models configured)...", len(models))
         # Get newly inserted jobs that need scoring
-        unscored = []
         cur = conn.execute(
             "SELECT id, source, link, title, company, location, posted_at, '' as raw_description "
             "FROM jobs WHERE status = 'new' AND relevance_score IS NULL"
@@ -126,7 +125,7 @@ def run_pipeline(config: dict, env_path: str = ".env") -> None:
         unscored = [dict(zip(columns, row)) for row in cur.fetchall()]
 
         if unscored:
-            scores = score_all_jobs(unscored, model, openrouter_key, batch_size)
+            scores = score_all_jobs(unscored, models, openrouter_key, batch_size)
             if scores:
                 update_llm_scores(conn, scores)
                 logger.info("Updated %d job scores", len(scores))
@@ -134,6 +133,8 @@ def run_pipeline(config: dict, env_path: str = ".env") -> None:
             logger.info("No unscored jobs to process")
     elif not openrouter_key:
         logger.warning("OPENROUTER_API_KEY not set — skipping LLM scoring")
+    elif not models:
+        logger.warning("No openrouter_models configured — skipping LLM scoring")
     else:
         logger.info("No new jobs to score")
 
@@ -145,19 +146,14 @@ def run_pipeline(config: dict, env_path: str = ".env") -> None:
 
     # ---- Step 6: Email alerts ----
     threshold = config.get("relevance_threshold", 70)
-    smtp_host = os.environ.get("SMTP_HOST", "")
-    smtp_port = int(os.environ.get("SMTP_PORT", "587"))
-    smtp_user = os.environ.get("SMTP_USER", "")
-    smtp_pass = os.environ.get("SMTP_PASS", "")
-    smtp_from = os.environ.get("SMTP_FROM", smtp_user)
     alert_email_to = os.environ.get("ALERT_EMAIL_TO", "")
 
-    if smtp_host and smtp_user and smtp_pass and alert_email_to:
+    if alert_email_to:
         notifiable = get_notifiable_jobs(conn, threshold)
         if notifiable:
             logger.info("Found %d jobs above threshold %d for notification", len(notifiable), threshold)
             success = send_digest(
-                notifiable, smtp_host, smtp_port, smtp_user, smtp_pass, smtp_from, alert_email_to
+                notifiable, data_dir=data_dir, alert_email_to=alert_email_to
             )
             if success:
                 mark_jobs_notified(conn, [j["id"] for j in notifiable])
@@ -165,7 +161,7 @@ def run_pipeline(config: dict, env_path: str = ".env") -> None:
         else:
             logger.info("No jobs above threshold %d — no email sent", threshold)
     else:
-        logger.info("SMTP not configured — skipping email alerts")
+        logger.info("ALERT_EMAIL_TO not configured — skipping email alerts")
 
     # ---- Step 7: Finish run log ----
     finish_run(conn, run_id, total_fetched, new_count)

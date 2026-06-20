@@ -1,9 +1,8 @@
-"""LLM relevance scoring via OpenRouter API."""
+"""LLM relevance scoring via OpenRouter API with multi-model fallback."""
 from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 
 import requests
@@ -43,8 +42,17 @@ def _build_prompt(jobs: list[dict]) -> str:
     return SCORING_PROMPT.format(jobs_json=json.dumps(job_summaries, indent=2))
 
 
-def score_batch(jobs: list[dict], model: str, api_key: str) -> list[dict]:
-    """Score a batch of jobs via OpenRouter. Returns list of {link, score, reason}."""
+def score_batch(jobs: list[dict], models: list[str], api_key: str) -> list[dict]:
+    """Score a batch of jobs via OpenRouter, trying models in order until one succeeds.
+
+    Args:
+        jobs: List of job dicts to score.
+        models: Ordered list of model IDs to try (first = preferred).
+        api_key: OpenRouter API key.
+
+    Returns:
+        List of {link, score, reason} dicts, or empty list if all models fail.
+    """
     if not jobs:
         return []
 
@@ -55,50 +63,86 @@ def score_batch(jobs: list[dict], model: str, api_key: str) -> list[dict]:
         "HTTP-Referer": "https://github.com/job-agent",
         "X-Title": "DevOps Job Agent",
     }
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.1,
-    }
 
-    try:
-        resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=120)
-        resp.raise_for_status()
-        data = resp.json()
+    for model in models:
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1,
+        }
 
-        content = data["choices"][0]["message"]["content"]
-        # Try to extract JSON from the response — LLM may wrap it in markdown
-        content = content.strip()
-        if content.startswith("```"):
-            # Strip markdown code fences
-            lines = content.split("\n")
-            lines = [l for l in lines if not l.strip().startswith("```")]
-            content = "\n".join(lines)
+        try:
+            logger.info("Trying model: %s", model)
+            resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=120)
 
-        parsed = json.loads(content)
-        if not isinstance(parsed, list):
-            logger.error("LLM returned non-list JSON: %s", type(parsed))
-            return []
+            if resp.status_code == 429:
+                logger.warning("Model %s rate-limited (429), trying next model", model)
+                time.sleep(1)
+                continue
 
-        results = []
-        for item in parsed:
-            results.append({
-                "link": item.get("link", ""),
-                "score": int(item.get("score", 0)),
-                "reason": item.get("reason", ""),
-            })
-        return results
+            resp.raise_for_status()
+            data = resp.json()
 
-    except requests.RequestException as e:
-        logger.error("OpenRouter API request failed: %s", e)
+            content = data["choices"][0]["message"]["content"]
+            # Try to extract JSON from the response — LLM may wrap it in markdown
+            content = content.strip()
+            if content.startswith("```"):
+                lines = content.split("\n")
+                lines = [l for l in lines if not l.strip().startswith("```")]
+                content = "\n".join(lines)
+
+            parsed = json.loads(content)
+            if not isinstance(parsed, list):
+                logger.error("Model %s returned non-list JSON: %s", model, type(parsed))
+                continue
+
+            results = []
+            for item in parsed:
+                results.append({
+                    "link": item.get("link", ""),
+                    "score": int(item.get("score", 0)),
+                    "reason": item.get("reason", ""),
+                })
+
+            logger.info("Model %s succeeded — scored %d jobs", model, len(results))
+            return results
+
+        except requests.RequestException as e:
+            logger.warning("Model %s request failed: %s — trying next", model, e)
+            continue
+        except (json.JSONDecodeError, KeyError, IndexError, ValueError) as e:
+            logger.warning("Model %s response parse failed: %s — trying next", model, e)
+            continue
+
+    logger.error("All %d models failed for this batch", len(models))
+    return []
+
+
+def score_all_jobs(
+    jobs: list[dict],
+    models: list[str],
+    api_key: str,
+    batch_size: int = 5,
+) -> list[dict]:
+    """Score all jobs in batches with multi-model fallback.
+
+    For each batch, models are tried in order. If the first model fails
+    (rate limit, timeout, parse error), the next model is attempted.
+    Only if all models fail does the batch go unscored.
+
+    Args:
+        jobs: List of job dicts to score.
+        models: Ordered list of model IDs (first = preferred).
+        api_key: OpenRouter API key.
+        batch_size: Number of jobs per API call.
+
+    Returns:
+        Aggregated list of {link, score, reason} dicts.
+    """
+    if not models:
+        logger.error("No models configured for scoring")
         return []
-    except (json.JSONDecodeError, KeyError, IndexError, ValueError) as e:
-        logger.error("Failed to parse LLM response: %s", e)
-        return []
 
-
-def score_all_jobs(jobs: list[dict], model: str, api_key: str, batch_size: int = 5) -> list[dict]:
-    """Score all jobs in batches. Returns aggregated list of {link, score, reason}."""
     all_scores = []
     total = len(jobs)
 
@@ -106,14 +150,14 @@ def score_all_jobs(jobs: list[dict], model: str, api_key: str, batch_size: int =
         batch = jobs[i : i + batch_size]
         logger.info("Scoring batch %d-%d of %d jobs", i + 1, min(i + batch_size, total), total)
 
-        # First attempt
-        scores = score_batch(batch, model, api_key)
+        # First attempt with full model list
+        scores = score_batch(batch, models, api_key)
 
-        # Retry once on failure
+        # Single retry — one more pass through the models
         if not scores:
-            logger.warning("Batch scoring returned empty, retrying...")
-            time.sleep(2)
-            scores = score_batch(batch, model, api_key)
+            logger.warning("Batch scoring returned empty from all models, retrying after delay...")
+            time.sleep(3)
+            scores = score_batch(batch, models, api_key)
 
         if not scores:
             logger.error("Batch scoring failed after retry for jobs starting at index %d", i)

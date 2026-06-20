@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Create data directory for volume mount
+# Mount /data with: credentials.json, token.json (Gmail OAuth2), .env
 RUN mkdir -p /data
 
 # Set up cron job

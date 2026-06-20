@@ -49,8 +49,15 @@ lever_companies:
 # LLM relevance scoring threshold (0-100) for email alerts
 relevance_threshold: 70
 
-# OpenRouter model for scoring (free/cheap tier models rotate — update as needed)
-openrouter_model: "deepseek/deepseek-chat-v3-0324:free"
+# OpenRouter models for scoring — tried in order; falls back to next on failure
+openrouter_models:
+  - "nvidia/nemotron-3-ultra-550b-a55b:free"
+  - "nvidia/nemotron-3-super-120b-a12b:free"
+  - "openai/gpt-oss-120b:free"
+  - "google/gemma-4-31b-it:free"
+  - "nvidia/nemotron-3-nano-30b-a3b:free"
+  - "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+  - "nvidia/nemotron-nano-9b-v2:free"
 
 # Batch size for LLM scoring calls
 llm_batch_size: 5
