@@ -1,0 +1,84 @@
+name: Run Job Agent
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"   # Every 6 hours
+  workflow_dispatch:          # Allow manual trigger
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+    env:
+      DATA_DIR: /home/runner/data
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+      GMAIL_CREDENTIALS_B64: ${{ secrets.GMAIL_CREDENTIALS_B64 }}
+      GMAIL_TOKEN_B64: ${{ secrets.GMAIL_TOKEN_B64 }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore cached database
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/data
+          key: job-agent-data-v1
+          restore-keys: |
+            job-agent-data-v1
+
+      - name: Create data directory
+        run: mkdir -p $DATA_DIR
+
+      - name: Decode Gmail OAuth2 secrets
+        run: |
+          if [ -n "$GMAIL_CREDENTIALS_B64" ]; then
+            echo "$GMAIL_CREDENTIALS_B64" | base64 -d > "$DATA_DIR/credentials.json"
+            echo "Gmail credentials.json written"
+          fi
+          if [ -n "$GMAIL_TOKEN_B64" ]; then
+            echo "$GMAIL_TOKEN_B64" | base64 -d > "$DATA_DIR/token.json"
+            echo "Gmail token.json written"
+          fi
+
+      - name: Run pipeline
+        run: python main.py
+
+      - name: Move report for Pages deployment
+        run: |
+          mkdir -p /tmp/pages-out
+          cp /home/runner/data/index.html /tmp/pages-out/index.html
+
+      - name: Upload report artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: /tmp/pages-out
+
+  deploy-pages:
+    needs: run-agent
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
